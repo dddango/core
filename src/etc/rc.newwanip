@@ -48,59 +48,42 @@ if (isset($argv[1])) {
 } else {
     $argument = null;
 }
-log_error("rc.newwanip: Informational is starting {$argument}.");
+
+log_error("Informational is starting '{$argument}'");
 
 if (empty($argument)) {
     $interface = "wan";
-    $interface_real = get_real_interface();
+    $interface_real = get_real_interface($interface);
+    $curwanip = get_interface_ip($interface);
 } else {
     $interface = convert_real_interface_to_friendly_interface_name($argument);
     $interface_real = $argument;
-}
-
-$interface_descr = convert_friendly_interface_to_friendly_descr($interface);
-
-/* If the interface is configured and not enabled, bail. We do not need to change settings for disabled interfaces. #3313 */
-if (is_array($config['interfaces'][$interface]) && !isset($config['interfaces'][$interface]['enable'])) {
-    log_error("Interface is disabled, nothing to do.");
-    return;
-} elseif (empty($interface)) {
-    log_error("Interface is empty, nothing to do.");
-    return;
-}
-
-if (empty($argument)) {
-    $curwanip = get_interface_ip();
-} else {
     $curwanip = find_interface_ip($interface_real);
-    if(empty($curwanip)) {
+    if (empty($curwanip)) {
         $curwanip = get_interface_ip($interface);
     }
 }
 
-log_error("rc.newwanip: on (IP address: {$curwanip}) (interface: {$interface_descr}[{$interface}]) (real interface: {$interface_real}).");
+/* If the interface is configured and not enabled, bail. We do not need to change settings for disabled interfaces. #3313 */
+if (!isset($config['interfaces'][$interface]['enable'])) {
+    log_error("Interface is disabled or empty, nothing to do.");
+    return;
+}
+
+$interface_descr = convert_friendly_interface_to_friendly_descr($interface);
+
+log_error("On (IP address: {$curwanip}) (interface: {$interface_descr}[{$interface}]) (real interface: {$interface_real}).");
 
 /*
- * NOTE: Take care of openvpn, no-ip or similar interfaces if you generate the event to reconfigure an interface.
- *      i.e. OpenVPN might be in tap mode and not have an ip.
+ * NOTE: Take care of openvpn and similar if you generate the event to reconfigure an interface.
+ *    i.e. OpenVPN might be in tap mode and not have an ip.
  */
-if ($curwanip == "0.0.0.0" || !is_ipaddr($curwanip)) {
-    if (substr($interface_real, 0, 4) != "ovpn") {
-        if (!empty($config['interfaces'][$interface]['ipaddr'])) {
-            log_error("rc.newwanip: Failed to update {$interface} IP, restarting...");
-            configd_run("interface reconfigure {$interface}");
-            return;
-        }
-    }
+if ((empty($curwanip) || !is_ipaddr($curwanip)) && substr($interface_real, 0, 4) != "ovpn") {
+    log_error("Failed to detect IP for {$interface_descr}[{$interface}]");
+    return;
 }
 
-if (file_exists("/var/db/{$interface}_cacheip")) {
-    $oldip = file_get_contents("/var/db/{$interface}_cacheip");
-} else {
-    $oldip = "0.0.0.0";
-}
-
-system_resolvconf_generate();
+$oldip = @file_get_contents("/var/db/{$interface}_cacheip");
 
 /* write the current interface IP to file */
 /* used in src/sbin/dhclient-script.ext */
@@ -130,7 +113,7 @@ if (!empty($bridgetmp)) {
     interface_bridge_add_member($bridgetmp, $interface_real);
 }
 
-/* make new hosts file */
+system_resolvconf_generate();
 system_hosts_generate();
 
 /* check tunneled IPv6 interface tracking */
@@ -151,11 +134,11 @@ if (isset($config['interfaces'][$interface]['ipaddrv6'])) {
 }
 
 /* Check Gif tunnels */
-if(isset($config['gifs']['gif']) && is_array($config['gifs']['gif'])){
-    foreach($config['gifs']['gif'] as $gif) {
-        if($gif['if'] == $interface) {
+if (isset($config['gifs']['gif']) && is_array($config['gifs']['gif'])){
+    foreach ($config['gifs']['gif'] as $gif) {
+        if ($gif['if'] == $interface) {
             foreach (legacy_config_get_interfaces(array("virtual" => false)) as $ifname => $ifparent) {
-                if(($ifparent['if'] == $gif['gifif']) && (isset($ifparent['enable']))) {
+                if (($ifparent['if'] == $gif['gifif']) && (isset($ifparent['enable']))) {
                   $gif['gifif'] = interface_gif_configure($gif);
                   $confif = convert_real_interface_to_friendly_interface_name($gif['gifif']);
                   if (!empty($confif)) {
@@ -189,7 +172,7 @@ if (!is_ipaddr($oldip) || $curwanip != $oldip || !is_ipaddrv4($config['interface
     plugins_configure('vpn', false, array($interface));
     plugins_configure('newwanip', false, array($interface));
     rrd_configure();
-}
 
-/* reload filter, don't try to sync to carp slave */
-filter_configure_sync();
+    /* reload filter, don't try to sync to carp slave */
+    filter_configure_sync();
+}
